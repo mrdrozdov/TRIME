@@ -1,5 +1,6 @@
 import argparse
 import os
+import math
 import numpy as np
 import faiss
 import time
@@ -10,6 +11,7 @@ parser.add_argument('--use_gpu', action='store_true')
 parser.add_argument('--do_train_only', action='store_true')
 parser.add_argument('--dstore_mmap', type=str, help='memmap where keys and vals are stored')
 parser.add_argument('--dstore_size', type=int, help='number of items saved in the datastore memmap')
+parser.add_argument('--dstore_pct', type=float, default=None, help='percent of dstore to keep')
 parser.add_argument('--dimension', type=int, default=1024, help='Size of each key')
 parser.add_argument('--dstore_fp16', default=False, action='store_true')
 parser.add_argument('--seed', type=int, default=1, help='random seed for sampling the subset of vectors to train the cache')
@@ -25,10 +27,10 @@ args = parser.parse_args()
 
 if args.dstore_fp16:
     keys = np.memmap(args.dstore_mmap+'-fp16_keys.npy', dtype=np.float16, mode='r', shape=(args.dstore_size, args.dimension))
-    vals = np.memmap(args.dstore_mmap+'_vals.npy', dtype=np.int, mode='r', shape=(args.dstore_size, 1))
+    vals = np.memmap(args.dstore_mmap+'_vals.npy', dtype=np.int32, mode='r', shape=(args.dstore_size, 1))
 else:
     keys = np.memmap(args.dstore_mmap+'_keys.npy', dtype=np.float32, mode='r', shape=(args.dstore_size, args.dimension))
-    vals = np.memmap(args.dstore_mmap+'_vals.npy', dtype=np.int, mode='r', shape=(args.dstore_size, 1))
+    vals = np.memmap(args.dstore_mmap+'_vals.npy', dtype=np.int32, mode='r', shape=(args.dstore_size, 1))
 
 args.faiss_index = args.faiss_index + '.' + args.dist
 
@@ -85,8 +87,9 @@ if args.use_gpu:
 
 start = args.starting_point
 start_time = time.time()
-while start < args.dstore_size:
-    end = min(args.dstore_size, start+args.num_keys_to_add_at_a_time)
+limit = math.floor(args.dstore_size * args.dstore_pct) if args.dstore_pct else args.dstore_size
+while start < limit:
+    end = min(limit, start+args.num_keys_to_add_at_a_time)
     to_add = keys[start:end].copy().astype(np.float32)
     if args.dist == 'cos':
         faiss.normalize_L2(to_add)
@@ -104,3 +107,4 @@ print('Writing Index')
 start = time.time()
 faiss.write_index(index, args.faiss_index)
 print('Writing index took {} s'.format(time.time()-start))
+

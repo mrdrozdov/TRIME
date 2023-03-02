@@ -42,11 +42,11 @@ class SequenceScorer(object):
             dists = dstore.dist_func(dists, knns, queries[tgt != self.pad, :], function=dstore.sim_func)
             dists = dists / math.sqrt(queries.shape[-1]) / (self.args.softmax_temp if temp is None else temp)
             vals = dstore.vals[knns]
-            vals = torch.from_numpy(vals).cuda().squeeze()
+            vals = torch.from_numpy(vals).long().cuda().squeeze()
 
             full_dists = torch.full((queries.shape[0], dstore.k), -10000.0).cuda()
             full_dists[tgt != self.pad] = dists.float()
-            full_vals = torch.full((queries.shape[0], dstore.k), -1).cuda()
+            full_vals = torch.full((queries.shape[0], dstore.k), -1).long().cuda()
             full_vals[tgt != self.pad] = vals
 
             return full_dists, full_vals
@@ -84,7 +84,7 @@ class SequenceScorer(object):
             local_mask = local_mask * -10000.0
 
             local_logits = local_logits + local_mask
-            
+
             local_labels = inbatch_labels.view(1, -1).expand(bsz, -1)
 
             if use_external:
@@ -132,7 +132,7 @@ class SequenceScorer(object):
                 ori_probs = F.log_softmax(logits, dim=-1)
                 token_loss = -ori_probs.gather(dim=1, index=orig_target.view(-1, 1)).view(-1)
                 norm_t = torch.logsumexp(logits, dim=-1)
-            
+
             self.check_mem(sample)
 
             if use_local or use_long or use_external:
@@ -183,7 +183,7 @@ class SequenceScorer(object):
 
             reps = reps.contiguous().view(-1, reps.shape[-1])
             labels = orig_target.view(-1)
-            
+
             self.update_mem(reps[labels != self.pad], labels[labels != self.pad], sample['id'])
 
         avg_probs = avg_probs.view(sample['target'].shape)
@@ -191,6 +191,7 @@ class SequenceScorer(object):
         bsz = avg_probs.size(0)
         hypos = []
         start_idxs = sample['start_indices'] if 'start_indices' in sample else [0] * bsz
+
         for i in range(bsz):
             # remove padding from ref
             ref = utils.strip_pad(sample['target'][i, start_idxs[i]:], self.pad) \
@@ -212,14 +213,23 @@ class SequenceScorer(object):
                     alignment = None
             else:
                 avg_attn_i = alignment = None
+
+            # Choose keys not associated with padding. Useful if the last batch has excessive padding.
+            dstore_keys = None
+            if self.args.save_knnlm_dstore:
+                mask = sample['target'][i, start_idxs[i]:] != self.pad
+                dstore_keys = net_output[1][self.args.knn_keytype][start_idxs[i]:,i,:] if self.args.save_knnlm_dstore else None
+                dstore_keys = dstore_keys[mask]
+
             hypos.append([{
                 'tokens': ref,
                 'score': score_i,
                 'attention': avg_attn_i,
                 'alignment': alignment,
                 'positional_scores': avg_probs_i,
-                'dstore_keys': net_output[1][self.args.knn_keytype][start_idxs[i]:,i,:] if self.args.save_knnlm_dstore else None,
+                'dstore_keys': dstore_keys,
             }])
+            #'dstore_keys': net_output[1][self.args.knn_keytype][start_idxs[i]:,i,:] if self.args.save_knnlm_dstore else None,
         return hypos
 
     def check_mem(self, sample):
@@ -228,7 +238,7 @@ class SequenceScorer(object):
             self.mem = None
             self.last_ids = None
             self.tot_mem = 0
-    
+
     def update_mem(self, new_reps, new_labels, new_ids):
         if self.mem is not None:
             new_reps = torch.cat((self.mem[0], new_reps.detach()), dim=0)
@@ -274,7 +284,7 @@ class SequenceScorer(object):
             curr_prob = torch.logsumexp(combine_probs + coeffs, dim=0)
 
             return curr_prob
-        
+
         orig_target = sample['target']
 
         # compute scores for each model in the ensemble
@@ -366,12 +376,21 @@ class SequenceScorer(object):
                     alignment = None
             else:
                 avg_attn_i = alignment = None
+
+            # Choose keys not associated with padding. Useful if the last batch has excessive padding.
+            dstore_keys = None
+            if self.args.save_knnlm_dstore:
+                mask = sample['target'][i, start_idxs[i]:] != self.pad
+                dstore_keys = decoder_out[1][self.args.knn_keytype][start_idxs[i]:,i,:] if self.args.save_knnlm_dstore else None
+                dstore_keys = dstore_keys[mask]
+
             hypos.append([{
                 'tokens': ref,
                 'score': score_i,
                 'attention': avg_attn_i,
                 'alignment': alignment,
                 'positional_scores': avg_probs_i,
-                'dstore_keys': decoder_out[1][self.args.knn_keytype][start_idxs[i]:,i,:] if self.args.save_knnlm_dstore else None,
+                'dstore_keys': dstore_keys,
             }])
+            # decoder_out[1][self.args.knn_keytype][start_idxs[i]:,i,:] if self.args.save_knnlm_dstore else None,
         return hypos

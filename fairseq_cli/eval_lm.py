@@ -175,12 +175,17 @@ def main(parsed_args):
             print('dim:', args.decoder_embed_dim)
             if args.dstore_fp16:
                 print('Saving fp16')
+                dstore_prob = np.memmap(args.dstore_mmap+'_prob.npy', dtype=np.float16, mode='w+', shape=(args.dstore_size, 1))
                 dstore_keys = np.memmap(args.dstore_mmap+'-fp16_keys.npy', dtype=np.float16, mode='w+', shape=(args.dstore_size, args.decoder_embed_dim))
-                dstore_vals = np.memmap(args.dstore_mmap+'_vals.npy', dtype=np.int, mode='w+', shape=(args.dstore_size, 1))
+                dstore_vals = np.memmap(args.dstore_mmap+'_vals.npy', dtype=np.int32, mode='w+', shape=(args.dstore_size, 1))
             else:
                 print('Saving fp32')
+                dstore_prob = np.memmap(args.dstore_mmap+'_prob.npy', dtype=np.float32, mode='w+', shape=(args.dstore_size, 1))
                 dstore_keys = np.memmap(args.dstore_mmap+'_keys.npy', dtype=np.float32, mode='w+', shape=(args.dstore_size, args.decoder_embed_dim))
-                dstore_vals = np.memmap(args.dstore_mmap+'_vals.npy', dtype=np.int, mode='w+', shape=(args.dstore_size, 1))
+                dstore_vals = np.memmap(args.dstore_mmap+'_vals.npy', dtype=np.int32, mode='w+', shape=(args.dstore_size, 1))
+            print(f"prob = {dstore_prob.shape} {dstore_prob.dtype}")
+            print(f"keys = {dstore_keys.shape} {dstore_keys.dtype}")
+            print(f"vals = {dstore_vals.shape} {dstore_vals.dtype}")
 
         dstore_idx = 0
         for ex_i, sample in enumerate(t):
@@ -197,21 +202,36 @@ def main(parsed_args):
                 hypos = scorer.generate(models, sample)
             gen_timer.stop(sample['ntokens'])
 
+            done = False
             for i, hypos_i in enumerate(hypos):
                 hypo = hypos_i[0]
                 if args.save_knnlm_dstore:
                     shape = hypo['dstore_keys'].shape
-                    if shape[0] == args.tokens_per_sample:
+                    if dstore_idx >= args.dstore_size:
+                        done = True
+                        print('Already done. Skipping.')
+                    elif shape[0] == args.tokens_per_sample or args.no_min_context:
+                        #assert not done
+                        if True:
+                            for k in ['dstore_keys', 'tokens', 'positional_scores']:
+                                assert hypo[k].shape[0] >= shape[0], (k, hypo[k].shape, shape)
+
                         if dstore_idx + shape[0] > args.dstore_size:
                             shape = [args.dstore_size - dstore_idx]
-                            hypo['dstore_keys'] = hypo['dstore_keys'][:shape[0]]
-                            hypo['tokens'] = hypo['tokens'][:shape[0]]
+                            for k in ['dstore_keys', 'tokens', 'positional_scores']:
+                                hypo[k] = hypo[k][:shape[0]]
                         if args.dstore_fp16:
+                            dstore_prob[dstore_idx:shape[0]+dstore_idx] = hypo['positional_scores'].view(-1, 1).cpu().numpy().astype(np.float16)
                             dstore_keys[dstore_idx:shape[0]+dstore_idx] = hypo['dstore_keys'].view(
                                 -1, args.decoder_embed_dim).cpu().numpy().astype(np.float16)
-                            dstore_vals[dstore_idx:shape[0]+dstore_idx] = hypo['tokens'].view(
-                                -1, 1).cpu().numpy().astype(np.int)
+                            #dstore_vals[dstore_idx:shape[0]+dstore_idx] = hypo['tokens'].view(
+                            #    -1, 1).cpu().numpy().astype(np.int)
+                            # Double check for overflow, which can happen easily with int16.
+                            tmp = hypo['tokens'].view(-1, 1).cpu().numpy().astype(np.int32)
+                            #assert (tmp >= 0).all().item()
+                            dstore_vals[dstore_idx:shape[0]+dstore_idx] = tmp
                         else:
+                            dstore_prob[dstore_idx:shape[0]+dstore_idx] = hypo['positional_scores'].view(-1, 1).cpu().numpy().astype(np.float32)
                             dstore_keys[dstore_idx:shape[0]+dstore_idx] = hypo['dstore_keys'].view(
                                 -1, args.decoder_embed_dim).cpu().numpy().astype(np.float32)
                             dstore_vals[dstore_idx:shape[0]+dstore_idx] = hypo['tokens'].view(
@@ -219,6 +239,7 @@ def main(parsed_args):
 
                         dstore_idx += shape[0]
                     else:
+                        done = True
                         print('Skipping this one with shape', shape)
 
                 sample_id = sample['id'][i]

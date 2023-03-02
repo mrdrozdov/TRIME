@@ -45,7 +45,7 @@ class KNN_Dstore(object):
                 self.keys = np.memmap(args.dstore_filename+'_keys.npy', dtype=np.float32, mode='r', shape=(self.dstore_size, self.dimension))
         print('Reading keys took {} s'.format(time.time() - start))
 
-        self.vals_from_memmap = np.memmap(args.dstore_filename+'_vals.npy', dtype=np.int, mode='r', shape=(self.dstore_size, 1))
+        self.vals_from_memmap = np.memmap(args.dstore_filename+'_vals.npy', dtype=np.int32, mode='r', shape=(self.dstore_size, 1))
         self.vals = self.vals_from_memmap[range(self.dstore_size)]
 
         # If you wish to load all the keys into memory
@@ -66,7 +66,7 @@ class KNN_Dstore(object):
 
             print('Loading to memory took {} s'.format(time.time() - start))
 
-        if not args.use_faiss_cpu:
+        if False and not args.use_faiss_cpu:
             self.cpu_index = index
             print('Index: CPU to GPU (device 1, 2, ...)')
             res = faiss.StandardGpuResources()
@@ -75,7 +75,8 @@ class KNN_Dstore(object):
             co.shard = True
             ngpus = faiss.get_num_gpus()
             print(f"ngpus = {ngpus}")
-            index = faiss.index_cpu_to_gpu_multiple_py([faiss.StandardGpuResources() for _ in range(1, ngpus)], index, co, range(1, ngpus))
+            #index = faiss.index_cpu_to_gpu_multiple_py([faiss.StandardGpuResources() for _ in range(1, ngpus)], index, co, range(1, ngpus))
+            index = faiss.index_cpu_to_gpu(res, 0, index)
             print('Index: on GPU now')
 
         return index
@@ -149,3 +150,4 @@ class KNN_Dstore(object):
 
         # TxBx1
         return full_yhat_knn_prob.view(qshape[0], qshape[1], 1)
+

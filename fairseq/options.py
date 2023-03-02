@@ -505,6 +505,7 @@ def add_eval_lm_args(parser):
                        help='save keys for the knnlm datastore')
     group.add_argument('--dstore-mmap', default=None, type=str,
                        help='If saving knnlm dstore, save keys and values to this file')
+    group.add_argument('--no-min-context', action='store_true')
 
     group.add_argument('--interp-temp', default=1.0, type=float, help='softmax temperature for linear interpolation')
     group.add_argument('--softmax-temp', default=1.0, type=float, help='softmax temperature')
